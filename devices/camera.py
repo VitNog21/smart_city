@@ -7,6 +7,7 @@ import json
 import threading
 from concurrent import futures
 import argparse
+import socket
 
 # Garante que os módulos gRPC gerados possam ser importados.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -14,15 +15,16 @@ from . import device_pb2
 from . import device_pb2_grpc
 
 parser = argparse.ArgumentParser(description="Simulador de Câmera Inteligente.")
-parser.add_argument("--id", type=str, required=True, help="ID único do dispositivo.")
-parser.add_argument("--port", type=int, required=True, help="Porta gRPC para o dispositivo.")
-parser.add_argument("--location", type=str, default="Localização não definida", help="Localização do dispositivo.")
+parser.add_argument("--id", type=str, required=True)
+parser.add_argument("--port", type=int, required=True)
+parser.add_argument("--location", type=str, default="Localização não definida")
 args = parser.parse_args()
 
 DEVICE_ID = args.id
 DEVICE_TYPE = "camera"
 GRPC_PORT = args.port
-RABBITMQ_HOST = "localhost"
+MULTICAST_GROUP = '224.1.1.1'
+MULTICAST_PORT = 5007
 
 device_state = {
     "id": DEVICE_ID,
@@ -32,31 +34,26 @@ device_state = {
     "location": args.location,
     "grpc_port": GRPC_PORT
 }
+rabbit_mq_info = {}
 
-def publish_message(routing_key, message_body):
+def publish_state():
     """
-    Estabelece uma conexão com o RabbitMQ e publica uma única mensagem
-    JSON para um tópico (routing key) específico.
+    Publica o estado atual do dispositivo no RabbitMQ. Esta função só executa
+    após as informações do broker serem recebidas via descoberta UDP.
     """
+    if not rabbit_mq_info:
+        return
     try:
         credentials = pika.PlainCredentials('user', 'password')
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST, credentials=credentials))
+        connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbit_mq_info['host'], credentials=credentials))
         channel = connection.channel()
         channel.exchange_declare(exchange='smart_city', exchange_type='topic')
-        channel.basic_publish(exchange='smart_city', routing_key=routing_key, body=json.dumps(message_body))
+        routing_key = f"device.{DEVICE_TYPE}.{DEVICE_ID}"
+        message = json.dumps(device_state)
+        channel.basic_publish(exchange='smart_city', routing_key=routing_key, body=message)
         connection.close()
     except Exception as e:
-        print(f" [!] {DEVICE_ID}: Falha ao publicar no RabbitMQ: {e}")
-
-def heartbeat_thread():
-    """
-    Executada em uma thread separada, envia uma mensagem de presença (heartbeat)
-    periodicamente para o tópico de descoberta do Gateway.
-    """
-    routing_key = f"device.discovery.{DEVICE_ID}"
-    while True:
-        publish_message(routing_key, device_state)
-        time.sleep(10)
+        print(f" [!] {DEVICE_ID}: Falha ao publicar estado: {e}")
 
 class DeviceServiceImpl(device_pb2_grpc.DeviceServiceServicer):
     """
@@ -66,35 +63,55 @@ class DeviceServiceImpl(device_pb2_grpc.DeviceServiceServicer):
     def SetStatus(self, request, context):
         """
         Altera o estado de energia da câmera (ON/OFF) conforme solicitado pelo Gateway
-        e publica a atualização no tópico de dados.
+        e publica a atualização de estado.
         """
         global device_state
         new_status = "ON" if request.status else "OFF"
         if device_state["status"] != new_status:
-            print(f" [!] {DEVICE_ID}: Comando gRPC recebido! Mudar status para: {new_status}")
             device_state["status"] = new_status
-            routing_key = f"device.data.{DEVICE_TYPE}.{DEVICE_ID}"
-            publish_message(routing_key, device_state)
+            publish_state()
         return device_pb2.StatusResponse(message=f"Câmera {DEVICE_ID} agora está {new_status}")
 
     def SetConfig(self, request, context):
         """
-        Altera uma configuração específica da câmera (ex: resolução) conforme
-        solicitado pelo Gateway e publica a atualização no tópico de dados.
+        Altera a configuração de resolução da câmera  conforme
+        solicitado pelo Gateway e publica a atualização de estado.
         """
         global device_state
         config_key = request.key
         config_value = request.value
-        
         if config_key == "resolution" and device_state.get(config_key) != config_value:
-            print(f" [!] {DEVICE_ID}: Comando gRPC recebido! Mudar {config_key} para: {config_value}")
             device_state[config_key] = config_value
-            # Publica a mudança de estado no tópico de DADOS para notificar o Gateway.
-            routing_key = f"device.data.{DEVICE_TYPE}.{DEVICE_ID}"
-            publish_message(routing_key, device_state)
+            publish_state()
             return device_pb2.StatusResponse(message=f"Resolução da Câmera {DEVICE_ID} alterada para {config_value}")
-        
         return device_pb2.StatusResponse(message=f"Configuração '{config_key}' não alterada.")
+
+def listen_for_discovery():
+    """
+    Executada em uma thread separada para escutar por broadcasts UDP Multicast
+    do Gateway, responder com suas informações e anunciar sua presença.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('', MULTICAST_PORT))
+    mreq = socket.inet_aton(MULTICAST_GROUP) + socket.inet_aton('0.0.0.0')
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    print(f" [*] {DEVICE_ID}: Aguardando descoberta pelo Gateway...")
+    while True:
+        data, addr = sock.recvfrom(1024)
+        print(f" [*] {DEVICE_ID}: Gateway descoberto em {addr}")
+        global rabbit_mq_info
+        message = json.loads(data.decode())
+        rabbit_mq_info = message.get('rabbitmq', {})
+        response_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        response_data = json.dumps({
+            "id": DEVICE_ID,
+            "type": DEVICE_TYPE,
+            "grpc_port": GRPC_PORT
+        }).encode()
+        response_sock.sendto(response_data, addr)
+        response_sock.close()
+        publish_state()
 
 def serve_grpc():
     """
@@ -109,6 +126,6 @@ def serve_grpc():
     server.wait_for_termination()
 
 if __name__ == '__main__':
-    hb_thread = threading.Thread(target=heartbeat_thread, daemon=True)
-    hb_thread.start()
+    discovery_thread = threading.Thread(target=listen_for_discovery, daemon=True)
+    discovery_thread.start()
     serve_grpc()
