@@ -15,7 +15,7 @@
             "request": "launch",
             "module": "devices.poste",
             "console": "integratedTerminal",
-            "args": [ // <-- ARGUMENTOS ADICIONADOS AQUI
+            "args": [ 
                 "--id", "poste-inicial-01",
                 "--port", "50050",
                 "--location", "Poste na Entrada Principal"
@@ -27,7 +27,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/devices/JS/sensor_temperatura.js",
             "console": "integratedTerminal",
-            "args": [ // <-- ARGUMENTOS ADICIONADOS AQUI
+            "args": [ 
                 "--id", "sensor-inicial-01",
                 "--location", "Sensor no Corredor Central"
             ]

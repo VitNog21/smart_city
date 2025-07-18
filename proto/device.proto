@@ -1,22 +1,35 @@
 syntax = "proto3";
 
 package device;
+
+// Define o serviço gRPC que os dispositivos atuadores devem implementar
+// Contém todos os métodos remotos que o Gateway pode invocar em um dispositivo
+
 service DeviceService {
+  // Altera o estado principal de um dispositivo
   rpc SetStatus(CommandRequest) returns (StatusResponse) {}
+
+  // Altera uma configuração específica de um dispositivo
   rpc SetConfig(ConfigRequest) returns (StatusResponse) {}
 }
 
+// Mensagem usada para enviar comandos de mudança de estado
+
 message CommandRequest {
   string device_id = 1;
-  bool status = 2; 
+  bool status = 2; // O novo estado (true para ON, false para OFF).
 }
+
+// Mensagem usada para enviar comandos de mudança de configuração
 
 message ConfigRequest {
   string device_id = 1;
-  string key = 2;
-  string value = 3;
+  string key = 2;  
+  string value = 3; 
 }
 
+// Mensagem de resposta padrão para todas as invocações de RPC
+
 message StatusResponse {
-  string message = 1;
+  string message = 1; // mensagem de confirmação
 }

@@ -10,54 +10,52 @@ from fastapi.staticfiles import StaticFiles
 from typing import Dict, Any, List, Set
 import time
 import subprocess
-
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import device_pb2
 import device_pb2_grpc
 
-# --- Configurações ---
 GATEWAY_HOST = '0.0.0.0'
 RABBITMQ_HOST = 'localhost'
-DEVICE_TIMEOUT_SECONDS = 15 # Tempo em segundos para considerar um dispositivo offline
+DEVICE_TIMEOUT_SECONDS = 15
 
-# --- Lógica para Criação Dinâmica ---
 SCRIPT_MAP = {
     "light_post": ["python", "-m", "devices.poste"],
     "temperature_sensor": ["node", "devices/JS/sensor_temperatura.js"]
 }
 next_grpc_port = 50051
 
-# --- Estado do Gateway ---
 devices: Dict[str, Dict[str, Any]] = {}
 update_queues: List[asyncio.Queue] = []
 devices_lock = threading.Lock()
-
 app = FastAPI()
-
-# --- Comunicação entre Threads e Startup ---
 main_event_loop = None
+
+app.mount("/static", StaticFiles(directory="client"), name="static")
 
 @app.on_event("startup")
 async def startup_event():
+    """
+    Executada quando o servidor FastAPI inicia. Captura o loop de eventos principal
+    e agenda a execução das tarefas de background (assinante RabbitMQ e health check).
+    """
     global main_event_loop
     main_event_loop = asyncio.get_running_loop()
     main_event_loop.run_in_executor(None, pika_subscriber, main_event_loop)
     main_event_loop.run_in_executor(None, health_check_thread, main_event_loop)
 
-# --- Montagem de Arquivos Estáticos ---
-app.mount("/static", StaticFiles(directory="client"), name="static")
-
-# --- Lógica de Health Check e Remoção ---
 def health_check_thread(loop: asyncio.AbstractEventLoop):
+    """
+    Executada em uma thread separada para verificar periodicamente a saúde dos dispositivos.
+    Remove da lista qualquer dispositivo que não enviou um heartbeat dentro do timeout definido.
+    """
     while True:
-        time.sleep(5) # Verifica a cada 5 segundos
+        time.sleep(5)
         
         devices_removed = False
         with devices_lock:
-            # Cria uma lista de dispositivos para remover para evitar modificar o dict durante a iteração
             devices_to_remove = []
             for device_id, info in devices.items():
                 last_seen = info.get('last_seen', 0)
@@ -72,10 +70,11 @@ def health_check_thread(loop: asyncio.AbstractEventLoop):
         if devices_removed:
             asyncio.run_coroutine_threadsafe(push_update(), loop)
 
-# --- Endpoints e outras funções ---
-# (O código restante é para a funcionalidade principal)
-
 def pika_subscriber(loop: asyncio.AbstractEventLoop):
+    """
+    Executada em uma thread separada para se conectar ao RabbitMQ e consumir mensagens.
+    Ouve tanto mensagens de dados quanto de descoberta/heartbeat dos dispositivos.
+    """
     while True:
         try:
             credentials = pika.PlainCredentials('user', 'password')
@@ -83,12 +82,10 @@ def pika_subscriber(loop: asyncio.AbstractEventLoop):
             channel = connection.channel()
             channel.exchange_declare(exchange='smart_city', exchange_type='topic')
             
-            # Fila para dados normais
             data_queue_result = channel.queue_declare(queue='', exclusive=True)
             data_queue_name = data_queue_result.method.queue
             channel.queue_bind(exchange='smart_city', queue=data_queue_name, routing_key='device.data.#')
 
-            # Fila para anúncios de presença e heartbeats
             discovery_queue_result = channel.queue_declare(queue='', exclusive=True)
             discovery_queue_name = discovery_queue_result.method.queue
             channel.queue_bind(exchange='smart_city', queue=discovery_queue_name, routing_key='device.discovery.#')
@@ -100,7 +97,7 @@ def pika_subscriber(loop: asyncio.AbstractEventLoop):
                 device_id = message['id']
                 
                 with devices_lock:
-                    # Atualiza o timestamp sempre que ouvimos do dispositivo
+                    # Atualiza o timestamp sempre que ouvimos do dispositivo para o health check.
                     message['last_seen'] = time.time()
                     if device_id in devices:
                         devices[device_id].update(message)
@@ -123,11 +120,18 @@ def pika_subscriber(loop: asyncio.AbstractEventLoop):
 
 @app.get("/")
 async def read_root():
-    with open("client/index.html") as f:
+    """
+    Endpoint principal que serve a interface web do cliente (index.html).
+    """
+    with open("client/index.html", encoding="utf-8") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
 @app.post("/api/devices/create")
 async def create_device(config: Dict[str, Any]):
+    """
+    Endpoint da API para criar e iniciar dinamicamente um novo processo de dispositivo
+    com base nos dados recebidos da interface do cliente.
+    """
     global next_grpc_port
     device_type = config.get("type")
     device_id = config.get("id")
@@ -155,6 +159,9 @@ async def create_device(config: Dict[str, Any]):
 
 @app.post("/api/devices/{device_id}/command")
 async def device_command(device_id: str, command_data: Dict[str, Any]):
+    """
+    Endpoint da API para enviar um comando (via gRPC) para um dispositivo atuador específico.
+    """
     with devices_lock:
         device_info = devices.get(device_id)
     
@@ -172,6 +179,10 @@ async def device_command(device_id: str, command_data: Dict[str, Any]):
         return {"error": f"gRPC call failed: {e.details()}"}, 500
 
 async def sse_generator(request: Request):
+    """
+    Gerador assíncrono para o streaming de Server-Sent Events (SSE). Mantém uma conexão
+    aberta com o cliente e envia atualizações da fila correspondente.
+    """
     queue = asyncio.Queue()
     update_queues.append(queue)
     try:
@@ -183,6 +194,10 @@ async def sse_generator(request: Request):
         update_queues.remove(queue)
 
 async def push_update():
+    """
+    Envia a lista atual de dispositivos para as filas de todos os clientes
+    conectados via SSE, notificando-os de qualquer mudança de estado.
+    """
     with devices_lock:
         data_to_send = list(devices.values())
     for q in update_queues:
@@ -190,9 +205,17 @@ async def push_update():
 
 @app.get("/api/events")
 async def event_stream(request: Request):
+    """
+    Endpoint da API que os clientes usam para se inscrever e receber atualizações
+    de estado em tempo real através de Server-Sent Events (SSE).
+    """
     return StreamingResponse(sse_generator(request), media_type="text/event-stream")
 
 @app.get("/api/devices")
 async def get_devices():
+    """
+    Endpoint da API que retorna o estado atual de todos os dispositivos conhecidos.
+    Normalmente usado pelo cliente na carga inicial da página.
+    """
     with devices_lock:
         return list(devices.values())

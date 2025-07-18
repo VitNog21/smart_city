@@ -1,6 +1,5 @@
 const amqp = require('amqplib/callback_api');
 
-// --- Leitura de Argumentos da Linha de Comando ---
 const args = {};
 process.argv.slice(2).forEach((val, index, array) => {
     if (val.startsWith('--')) {
@@ -11,7 +10,6 @@ process.argv.slice(2).forEach((val, index, array) => {
     }
 });
 
-// --- Configurações do Dispositivo ---
 const DEVICE_ID = args.id || "sensor-js-01";
 const DEVICE_TYPE = "temperature_sensor";
 const RABBITMQ_HOST = "localhost";
@@ -24,12 +22,16 @@ const deviceState = {
     location: args.location || "Localização Padrão"
 };
 
-// --- Lógica de Publicação (com log de erro) ---
+/**
+ * Estabelece uma conexão com o RabbitMQ e publica uma única mensagem
+ * JSON para um tópico (routing key) específico.
+ * @param {string} routingKey - O tópico para o qual a mensagem será enviada.
+ * @param {object} messageBody - O objeto JavaScript a ser enviado como JSON.
+ */
 function publishMessage(routingKey, messageBody) {
     const connStr = `amqp://user:password@${RABBITMQ_HOST}`;
     amqp.connect(connStr, (err, conn) => {
         if (err) {
-            // ERRO AGORA SERÁ VISÍVEL NO TERMINAL
             console.error(`[${DEVICE_ID}] ERRO ao conectar no RabbitMQ:`, err.message);
             return;
         }
@@ -42,13 +44,21 @@ function publishMessage(routingKey, messageBody) {
             const exchange = 'smart_city';
             ch.assertExchange(exchange, 'topic', { durable: false });
             ch.publish(exchange, routingKey, Buffer.from(JSON.stringify(messageBody)));
-            // console.log(`[${DEVICE_ID}] Mensagem enviada para '${routingKey}'`);
             setTimeout(() => { conn.close(); }, 500);
         });
     });
 }
 
-// --- Envio de Dados do Sensor (tópico device.data) ---
+/**
+ * Envia uma mensagem de presença (heartbeat) para o tópico de descoberta do Gateway.
+ */
+function sendHeartbeat() {
+    const routingKey = `device.discovery.${DEVICE_ID}`;
+    console.log(`[${DEVICE_ID}] Enviando anúncio/heartbeat...`);
+    publishMessage(routingKey, deviceState);
+}
+
+// Bloco que simula a leitura de um novo dado do sensor e o publica a cada 15 segundos.
 setInterval(() => {
     deviceState.value = parseFloat((20 + Math.random() * 5 - 2.5).toFixed(2));
     const routingKey = `device.data.${DEVICE_TYPE}.${DEVICE_ID}`;
@@ -56,16 +66,9 @@ setInterval(() => {
     publishMessage(routingKey, deviceState);
 }, 15000);
 
-// --- Heartbeat e Anúncio (tópico device.discovery) ---
-function sendHeartbeat() {
-    const routingKey = `device.discovery.${DEVICE_ID}`;
-    console.log(`[${DEVICE_ID}] Enviando anúncio/heartbeat...`);
-    publishMessage(routingKey, deviceState);
-}
-
-// Envia heartbeat a cada 10 segundos
+// Bloco que envia o heartbeat do dispositivo para o Gateway a cada 10 segundos.
 setInterval(sendHeartbeat, 10000);
 
-// Envia o anúncio inicial imediatamente ao iniciar
+// Bloco que envia o anúncio de presença inicial assim que o script é iniciado.
 console.log(`[*] Sensor '${DEVICE_ID}': Iniciado. Anunciando presença...`);
 sendHeartbeat();

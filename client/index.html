@@ -7,8 +7,7 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; color: #1c1e21; margin: 0; padding: 20px; }
         h1 { text-align: center; color: #0c4a6e; }
-        
-        .creator-card { background-color: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; padding: 20px; margin-bottom: 20px; max-width: 800px; margin-left: auto; margin-right: auto; }
+        .creator-card { background-color: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; padding: 20px; margin-bottom: 20px; max-width: 600px; margin-left: auto; margin-right: auto; }
         .creator-card h3 { margin-top: 0; color: #075985; }
         .creator-card .form-group { margin-bottom: 10px; }
         .creator-card label { display: block; margin-bottom: 5px; font-weight: bold; }
@@ -39,8 +38,8 @@
         <div class="form-group">
             <label for="device-type">Tipo:</label>
             <select id="device-type">
-              <option value="light_post">Poste de Luz</option>
-              <option value="temperature_sensor">Sensor de Temperatura</option>
+                <option value="light_post">Poste de Luz</option>
+                <option value="temperature_sensor">Sensor de Temperatura</option>
             </select>
         </div>
         <div class="form-group">
@@ -49,15 +48,14 @@
         </div>
         <div class="form-group">
             <label for="device-location">Localização:</label>
-            <input type="text" id="device-location" placeholder="ex: Praça Portugal">
+            <input type="text" id="device-location" placeholder="ex: Praça da Matriz">
         </div>
         <button onclick="addDevice()">Adicionar Dispositivo</button>
     </div>
     
     <hr>
     
-    <div id="devices-container">
-        </div>
+    <div id="devices-container"></div>
 
     <script>
         const devicesContainer = document.getElementById('devices-container');
@@ -135,6 +133,8 @@
                 const result = await response.json();
                 if (response.ok) {
                     alert(result.message);
+                    document.getElementById('device-id').value = '';
+                    document.getElementById('device-location').value = '';
                 } else {
                     alert(`Erro: ${result.error}`);
                 }
@@ -159,12 +159,11 @@
             eventSource.onerror = function(err) {
                 console.error('Erro no EventSource, tentando reconectar...', err);
                 eventSource.close();
-                setTimeout(connectToEventStream, 5000); // Tenta reconectar a cada 5 segundos
+                setTimeout(connectToEventStream, 5000);
             };
         }
 
         connectToEventStream();
-
     </script>
 </body>
 </html>
