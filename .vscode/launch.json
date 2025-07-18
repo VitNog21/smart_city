@@ -1,0 +1,47 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Gateway",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/run.py",
+            "console": "integratedTerminal",
+            "preLaunchTask": "Start RabbitMQ"
+        },
+        {
+            "name": "Launch Poste de Luz",
+            "type": "python",
+            "request": "launch",
+            "module": "devices.poste",
+            "console": "integratedTerminal",
+            "args": [ // <-- ARGUMENTOS ADICIONADOS AQUI
+                "--id", "poste-inicial-01",
+                "--port", "50050",
+                "--location", "Poste na Entrada Principal"
+            ]
+        },
+        {
+            "name": "Launch Sensor de Temperatura",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/devices/JS/sensor_temperatura.js",
+            "console": "integratedTerminal",
+            "args": [ // <-- ARGUMENTOS ADICIONADOS AQUI
+                "--id", "sensor-inicial-01",
+                "--location", "Sensor no Corredor Central"
+            ]
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Launch All Services",
+            "configurations": [
+                "Launch Gateway",
+                "Launch Poste de Luz",
+                "Launch Sensor de Temperatura"
+            ],
+            "stopAll": true
+        }
+    ]
+}

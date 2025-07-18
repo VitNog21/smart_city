@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package device;
+service DeviceService {
+  rpc SetStatus(CommandRequest) returns (StatusResponse) {}
+  rpc SetConfig(ConfigRequest) returns (StatusResponse) {}
+}
+
+message CommandRequest {
+  string device_id = 1;
+  bool status = 2; 
+}
+
+message ConfigRequest {
+  string device_id = 1;
+  string key = 2;
+  string value = 3;
+}
+
+message StatusResponse {
+  string message = 1;
+}

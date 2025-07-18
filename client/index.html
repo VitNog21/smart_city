@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart City Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; color: #1c1e21; margin: 0; padding: 20px; }
+        h1 { text-align: center; color: #0c4a6e; }
+        
+        .creator-card { background-color: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; padding: 20px; margin-bottom: 20px; max-width: 800px; margin-left: auto; margin-right: auto; }
+        .creator-card h3 { margin-top: 0; color: #075985; }
+        .creator-card .form-group { margin-bottom: 10px; }
+        .creator-card label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .creator-card input, .creator-card select { width: 95%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
+        .creator-card button { background-color: #075985; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        .creator-card button:hover { background-color: #0c4a6e; }
+        hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
+
+        #devices-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        .device-card { background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; transition: transform 0.2s; }
+        .device-card:hover { transform: translateY(-5px); }
+        .device-card h3 { margin-top: 0; color: #075985; }
+        .device-card p { margin: 5px 0; }
+        .device-card strong { color: #333; }
+        .device-card .controls button { background-color: #0ea5e9; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin-right: 5px; }
+        .device-card .controls button:hover { background-color: #0284c7; }
+        .device-card .controls button:disabled { background-color: #9ca3af; cursor: not-allowed; }
+        .device-card .status-on { color: #16a34a; font-weight: bold; }
+        .device-card .status-off { color: #dc2626; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>Painel de Controle da Cidade Inteligente</h1>
+    
+    <div class="creator-card">
+        <h3>Criar Novo Dispositivo</h3>
+        <div class="form-group">
+            <label for="device-type">Tipo:</label>
+            <select id="device-type">
+              <option value="light_post">Poste de Luz</option>
+              <option value="temperature_sensor">Sensor de Temperatura</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="device-id">ID do Dispositivo:</label>
+            <input type="text" id="device-id" placeholder="ex: poste-rua-01">
+        </div>
+        <div class="form-group">
+            <label for="device-location">Localização:</label>
+            <input type="text" id="device-location" placeholder="ex: Praça Portugal">
+        </div>
+        <button onclick="addDevice()">Adicionar Dispositivo</button>
+    </div>
+    
+    <hr>
+    
+    <div id="devices-container">
+        </div>
+
+    <script>
+        const devicesContainer = document.getElementById('devices-container');
+
+        function renderDevice(device) {
+            let controlsHtml = '';
+            let statusHtml = '';
+            const deviceTypeFormatted = (device.type || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+            if (device.type === 'light_post') {
+                const isOn = device.status === 'ON';
+                controlsHtml = `
+                    <div class="controls">
+                        <button onclick="sendCommand('${device.id}', true)" ${isOn ? 'disabled' : ''}>Ligar</button>
+                        <button onclick="sendCommand('${device.id}', false)" ${!isOn ? 'disabled' : ''}>Desligar</button>
+                    </div>
+                `;
+                statusHtml = `<p>Estado: <span class="${isOn ? 'status-on' : 'status-off'}">${device.status || 'Desconhecido'}</span></p>`;
+            }
+
+            if (device.type === 'temperature_sensor') {
+                statusHtml = `<p>Valor: <strong>${device.value !== undefined ? device.value : 'N/A'} ${device.unit || ''}</strong></p>`;
+            }
+            
+            return `
+                <div class="device-card" id="device-${device.id}">
+                    <h3>${deviceTypeFormatted}</h3>
+                    <p>ID: <strong>${device.id}</strong></p>
+                    ${statusHtml}
+                    <p>Localização: <strong>${device.location || 'N/A'}</strong></p>
+                    ${controlsHtml}
+                </div>
+            `;
+        }
+        
+        function updateDeviceList(devices) {
+            devicesContainer.innerHTML = '';
+            if (!devices || devices.length === 0) {
+                devicesContainer.innerHTML = '<p>Nenhum dispositivo detectado ainda...</p>';
+                return;
+            }
+            devices.forEach(device => {
+                devicesContainer.innerHTML += renderDevice(device);
+            });
+        }
+
+        async function sendCommand(deviceId, status) {
+            try {
+                await fetch(`/api/devices/${deviceId}/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: status }),
+                });
+            } catch (error) {
+                console.error('Erro de rede ao enviar comando:', error);
+            }
+        }
+        
+        async function addDevice() {
+            const type = document.getElementById('device-type').value;
+            const id = document.getElementById('device-id').value;
+            const location = document.getElementById('device-location').value;
+
+            if (!id || !location) {
+                alert('Por favor, preencha o ID e a Localização.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/devices/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, id, location }),
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    alert(result.message);
+                } else {
+                    alert(`Erro: ${result.error}`);
+                }
+            } catch (error) {
+                console.error('Falha ao criar dispositivo:', error);
+                alert('Erro de conexão ao tentar criar o dispositivo.');
+            }
+        }
+        
+        function connectToEventStream() {
+            const eventSource = new EventSource('/api/events');
+
+            eventSource.onmessage = function(event) {
+                try {
+                    const devices = JSON.parse(event.data);
+                    updateDeviceList(devices);
+                } catch (e) {
+                    console.error("Failed to parse event data:", e);
+                }
+            };
+
+            eventSource.onerror = function(err) {
+                console.error('Erro no EventSource, tentando reconectar...', err);
+                eventSource.close();
+                setTimeout(connectToEventStream, 5000); // Tenta reconectar a cada 5 segundos
+            };
+        }
+
+        connectToEventStream();
+
+    </script>
+</body>
+</html>
