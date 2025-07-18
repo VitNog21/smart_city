@@ -15,14 +15,13 @@
         .creator-card button { background-color: #075985; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; }
         .creator-card button:hover { background-color: #0c4a6e; }
         hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
-
-        #devices-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        #devices-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
         .device-card { background-color: #fff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 20px; transition: transform 0.2s; }
-        .device-card:hover { transform: translateY(-5px); }
         .device-card h3 { margin-top: 0; color: #075985; }
-        .device-card p { margin: 5px 0; }
+        .device-card p { margin: 8px 0; }
         .device-card strong { color: #333; }
-        .device-card .controls button { background-color: #0ea5e9; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin-right: 5px; }
+        .device-card .controls { margin-top: 15px; }
+        .device-card .controls button { background-color: #0ea5e9; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; margin-right: 5px; margin-bottom: 5px; }
         .device-card .controls button:hover { background-color: #0284c7; }
         .device-card .controls button:disabled { background-color: #9ca3af; cursor: not-allowed; }
         .device-card .status-on { color: #16a34a; font-weight: bold; }
@@ -30,7 +29,6 @@
     </style>
 </head>
 <body>
-
     <h1>Painel de Controle da Cidade Inteligente</h1>
     
     <div class="creator-card">
@@ -40,15 +38,16 @@
             <select id="device-type">
                 <option value="light_post">Poste de Luz</option>
                 <option value="temperature_sensor">Sensor de Temperatura</option>
+                <option value="camera">Câmera</option>
             </select>
         </div>
         <div class="form-group">
             <label for="device-id">ID do Dispositivo:</label>
-            <input type="text" id="device-id" placeholder="ex: poste-rua-01">
+            <input type="text" id="device-id" placeholder="ex: camera-entrada-01">
         </div>
         <div class="form-group">
             <label for="device-location">Localização:</label>
-            <input type="text" id="device-location" placeholder="ex: Praça da Matriz">
+            <input type="text" id="device-location" placeholder="ex: Entrada do Prédio Principal">
         </div>
         <button onclick="addDevice()">Adicionar Dispositivo</button>
     </div>
@@ -67,28 +66,41 @@
 
             if (device.type === 'light_post') {
                 const isOn = device.status === 'ON';
-                controlsHtml = `
-                    <div class="controls">
+                controlsHtml = `<div class="controls">
                         <button onclick="sendCommand('${device.id}', true)" ${isOn ? 'disabled' : ''}>Ligar</button>
                         <button onclick="sendCommand('${device.id}', false)" ${!isOn ? 'disabled' : ''}>Desligar</button>
-                    </div>
-                `;
+                    </div>`;
                 statusHtml = `<p>Estado: <span class="${isOn ? 'status-on' : 'status-off'}">${device.status || 'Desconhecido'}</span></p>`;
+            }
+
+            if (device.type === 'camera') {
+                const isOn = device.status === 'ON';
+                const isHD = device.resolution === 'HD';
+                const isFullHD = device.resolution === 'FullHD';
+                const is4K = device.resolution === '4K';
+                statusHtml = `<p>Estado: <span class="${isOn ? 'status-on' : 'status-off'}">${device.status || 'Desconhecido'}</span></p>
+                              <p>Resolução: <strong>${device.resolution || 'N/A'}</strong></p>`;
+                controlsHtml = `<div class="controls">
+                        <button onclick="sendCommand('${device.id}', true)" ${isOn ? 'disabled' : ''}>Ligar</button>
+                        <button onclick="sendCommand('${device.id}', false)" ${!isOn ? 'disabled' : ''}>Desligar</button>
+                        <br>
+                        <button onclick="sendConfig('${device.id}', 'resolution', 'HD')" ${isHD ? 'disabled' : ''}>HD</button>
+                        <button onclick="sendConfig('${device.id}', 'resolution', 'FullHD')" ${isFullHD ? 'disabled' : ''}>FullHD</button>
+                        <button onclick="sendConfig('${device.id}', 'resolution', '4K')" ${is4K ? 'disabled' : ''}>4K</button>
+                    </div>`;
             }
 
             if (device.type === 'temperature_sensor') {
                 statusHtml = `<p>Valor: <strong>${device.value !== undefined ? device.value : 'N/A'} ${device.unit || ''}</strong></p>`;
             }
             
-            return `
-                <div class="device-card" id="device-${device.id}">
+            return `<div class="device-card" id="device-${device.id}">
                     <h3>${deviceTypeFormatted}</h3>
                     <p>ID: <strong>${device.id}</strong></p>
                     ${statusHtml}
                     <p>Localização: <strong>${device.location || 'N/A'}</strong></p>
                     ${controlsHtml}
-                </div>
-            `;
+                </div>`;
         }
         
         function updateDeviceList(devices) {
@@ -97,7 +109,7 @@
                 devicesContainer.innerHTML = '<p>Nenhum dispositivo detectado ainda...</p>';
                 return;
             }
-            devices.forEach(device => {
+            devices.sort((a, b) => a.id.localeCompare(b.id)).forEach(device => {
                 devicesContainer.innerHTML += renderDevice(device);
             });
         }
@@ -109,9 +121,17 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ status: status }),
                 });
-            } catch (error) {
-                console.error('Erro de rede ao enviar comando:', error);
-            }
+            } catch (error) { console.error('Erro de rede ao enviar comando:', error); }
+        }
+
+        async function sendConfig(deviceId, key, value) {
+            try {
+                await fetch(`/api/devices/${deviceId}/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: key, value: value }),
+                });
+            } catch (error) { console.error('Erro de rede ao enviar configuração:', error); }
         }
         
         async function addDevice() {
@@ -146,16 +166,12 @@
         
         function connectToEventStream() {
             const eventSource = new EventSource('/api/events');
-
             eventSource.onmessage = function(event) {
                 try {
                     const devices = JSON.parse(event.data);
                     updateDeviceList(devices);
-                } catch (e) {
-                    console.error("Failed to parse event data:", e);
-                }
+                } catch (e) { console.error("Failed to parse event data:", e); }
             };
-
             eventSource.onerror = function(err) {
                 console.error('Erro no EventSource, tentando reconectar...', err);
                 eventSource.close();

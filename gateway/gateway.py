@@ -13,6 +13,7 @@ import subprocess
 import sys
 import os
 
+# Garante que os módulos gRPC gerados possam ser importados.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import device_pb2
 import device_pb2_grpc
@@ -23,7 +24,8 @@ DEVICE_TIMEOUT_SECONDS = 15
 
 SCRIPT_MAP = {
     "light_post": ["python", "-m", "devices.poste"],
-    "temperature_sensor": ["node", "devices/JS/sensor_temperatura.js"]
+    "temperature_sensor": ["node", "devices/JS/sensor_temperatura.js"],
+    "camera": ["python", "-m", "devices.camera"]
 }
 next_grpc_port = 50051
 
@@ -52,13 +54,14 @@ def health_check_thread(loop: asyncio.AbstractEventLoop):
     Remove da lista qualquer dispositivo que não enviou um heartbeat dentro do timeout definido.
     """
     while True:
-        time.sleep(5)
+        time.sleep(15)
         
         devices_removed = False
         with devices_lock:
             devices_to_remove = []
             for device_id, info in devices.items():
                 last_seen = info.get('last_seen', 0)
+                # Verifica se o tempo desde a última mensagem é maior que o timeout.
                 if time.time() - last_seen > DEVICE_TIMEOUT_SECONDS:
                     devices_to_remove.append(device_id)
             
@@ -97,7 +100,6 @@ def pika_subscriber(loop: asyncio.AbstractEventLoop):
                 device_id = message['id']
                 
                 with devices_lock:
-                    # Atualiza o timestamp sempre que ouvimos do dispositivo para o health check.
                     message['last_seen'] = time.time()
                     if device_id in devices:
                         devices[device_id].update(message)
@@ -111,7 +113,7 @@ def pika_subscriber(loop: asyncio.AbstractEventLoop):
             channel.basic_consume(queue=discovery_queue_name, on_message_callback=on_message, auto_ack=True)
             
             channel.start_consuming()
-        except pika.exceptions.AMQPConnectionError as e:
+        except pika.exceptions.AMQPConnectionError:
             print(f" [!] RabbitMQ Subscriber: Connection failed. Retrying in 5s...")
             time.sleep(5)
         except Exception as e:
@@ -147,7 +149,8 @@ async def create_device(config: Dict[str, Any]):
     command_parts = command_parts[:]
     command_parts.extend(["--id", device_id, "--location", location])
 
-    if device_type == "light_post":
+    actuator_types = ["light_post", "camera"]
+    if device_type in actuator_types:
         command_parts.extend(["--port", str(next_grpc_port)])
         next_grpc_port += 1
     
@@ -160,14 +163,13 @@ async def create_device(config: Dict[str, Any]):
 @app.post("/api/devices/{device_id}/command")
 async def device_command(device_id: str, command_data: Dict[str, Any]):
     """
-    Endpoint da API para enviar um comando (via gRPC) para um dispositivo atuador específico.
+    Endpoint da API para enviar um comando de status (ex: ligar/desligar) 
+    para um atuador específico via gRPC.
     """
     with devices_lock:
         device_info = devices.get(device_id)
-    
     if not device_info or 'grpc_port' not in device_info or not device_info['grpc_port']:
         return {"error": "Dispositivo não é um atuador ou não possui porta gRPC."}, 404
-
     try:
         grpc_port = device_info['grpc_port']
         status_to_send = command_data.get("status", False)
@@ -177,6 +179,29 @@ async def device_command(device_id: str, command_data: Dict[str, Any]):
             return {"message": response.message, "status": "success"}
     except grpc.aio.AioRpcError as e:
         return {"error": f"gRPC call failed: {e.details()}"}, 500
+
+@app.post("/api/devices/{device_id}/config")
+async def device_config(device_id: str, config_data: Dict[str, Any]):
+    """
+    Endpoint da API para enviar um comando de configuração (ex: mudar resolução) 
+    para um atuador específico via gRPC.
+    """
+    with devices_lock:
+        device_info = devices.get(device_id)
+    if not device_info or 'grpc_port' not in device_info or not device_info['grpc_port']:
+        return {"error": "Dispositivo não é um atuador ou não possui porta gRPC."}, 404
+    try:
+        grpc_port = device_info['grpc_port']
+        key = config_data.get("key")
+        value = config_data.get("value")
+        if not all([key, value]):
+            return {"error": "Chave (key) e valor (value) são obrigatórios."}, 400
+        async with grpc.aio.insecure_channel(f'localhost:{grpc_port}') as channel:
+            stub = device_pb2_grpc.DeviceServiceStub(channel)
+            response = await stub.SetConfig(device_pb2.ConfigRequest(device_id=device_id, key=key, value=value))
+            return {"message": response.message, "status": "success"}
+    except grpc.aio.AioRpcError as e:
+        return {"error": f"gRPC config call failed: {e.details()}"}, 500
 
 async def sse_generator(request: Request):
     """
