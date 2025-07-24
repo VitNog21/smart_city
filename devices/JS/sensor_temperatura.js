@@ -1,3 +1,4 @@
+const dgram = require('dgram');
 const amqp = require('amqplib');
 
 const args = {};
@@ -12,26 +13,37 @@ process.argv.slice(2).forEach((val, index, array) => {
 
 const DEVICE_ID = args.id || "sensor-js-01";
 const DEVICE_TYPE = "temperature_sensor";
-const RABBITMQ_HOST = "localhost";
+const MULTICAST_GROUP = '224.1.1.1';
+const MULTICAST_PORT = 5007;
 
+// O estado do dispositivo, que será enviado nas publicações de dados.
 const deviceState = {
     id: DEVICE_ID,
     type: DEVICE_TYPE,
     value: 20.0,
     unit: "Celsius",
-    location: args.location || "Localização Padrão"
+    location: args.location || "Localização Padrão JS"
 };
 
+// Variável para armazenar a configuração do RabbitMQ recebida do Gateway.
+let rabbitMQConfig = null;
+let dataInterval = null; // Variável para controlar o intervalo de envio de dados.
+
 /**
- * Conecta ao RabbitMQ e publica uma mensagem de forma assíncrona e confiável,
- * usando a API baseada em Promises (async/await).
+ * Conecta ao RabbitMQ e publica uma mensagem de forma assíncrona.
+ * Só funciona após o gateway ser descoberto.
  * @param {string} routingKey - O tópico para o qual a mensagem será enviada.
  * @param {object} messageBody - O objeto JavaScript a ser enviado como JSON.
  */
 async function publishMessage(routingKey, messageBody) {
+    if (!rabbitMQConfig) {
+        console.error(`[${DEVICE_ID}] RabbitMQ não configurado. Aguardando descoberta...`);
+        return;
+    }
+
     let connection;
     try {
-        const connStr = `amqp://user:password@${RABBITMQ_HOST}`;
+        const connStr = `amqp://user:password@${rabbitMQConfig.host}`;
         connection = await amqp.connect(connStr);
         const channel = await connection.createChannel();
         
@@ -44,7 +56,6 @@ async function publishMessage(routingKey, messageBody) {
         console.error(`[${DEVICE_ID}] ERRO ao publicar no RabbitMQ:`, err.message);
     } finally {
         if (connection) {
-            // Aguarda um pequeno instante antes de fechar para garantir o envio da mensagem.
             await new Promise(resolve => setTimeout(resolve, 500));
             await connection.close();
         }
@@ -52,26 +63,72 @@ async function publishMessage(routingKey, messageBody) {
 }
 
 /**
- * Prepara e envia a mensagem de presença (heartbeat) do dispositivo
- * para o tópico de descoberta do Gateway.
+ * Inicia o envio periódico de dados de temperatura.
+ * Esta função é chamada somente após o dispositivo ser descoberto.
  */
-function sendHeartbeat() {
-    const routingKey = `device.discovery.${DEVICE_ID}`;
-    console.log(`[${DEVICE_ID}] Enviando anúncio/heartbeat...`);
-    publishMessage(routingKey, deviceState);
+function startSendingData() {
+    if (dataInterval) {
+        // Evita criar múltiplos intervalos se a descoberta ocorrer mais de uma vez.
+        return;
+    }
+    
+    console.log(`[${DEVICE_ID}] Gateway descoberto. Iniciando envio de dados a cada 15 segundos.`);
+    
+    dataInterval = setInterval(() => {
+        deviceState.value = parseFloat((20 + Math.random() * 5 - 2.5).toFixed(2));
+        const routingKey = `device.data.${DEVICE_TYPE}.${DEVICE_ID}`;
+        console.log(`[${DEVICE_ID}] Enviando dado: ${deviceState.value}°C`);
+        publishMessage(routingKey, deviceState);
+    }, 15000);
 }
 
-// Simula a leitura de um novo dado do sensor e o publica no tópico de dados a cada 15 segundos.
-setInterval(() => {
-    deviceState.value = parseFloat((20 + Math.random() * 5 - 2.5).toFixed(2));
-    const routingKey = `device.data.${DEVICE_TYPE}.${DEVICE_ID}`;
-    console.log(`[${DEVICE_ID}] Enviando dado: ${deviceState.value}°C`);
-    publishMessage(routingKey, deviceState);
-}, 15000);
 
-// Envia o heartbeat do dispositivo para o Gateway a cada 10 segundos para indicar que está ativo.
-setInterval(sendHeartbeat, 10000);
+/**
+ * Cria e configura o socket UDP para escutar as mensagens de descoberta do Gateway.
+ */
+function listenForDiscovery() {
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 
-// Envia o anúncio de presença inicial imediatamente quando o script é iniciado.
-console.log(`[*] Sensor '${DEVICE_ID}': Iniciado. Anunciando presença...`);
-sendHeartbeat();
+    socket.on('error', (err) => {
+        console.error(`[${DEVICE_ID}] Erro no socket: \n${err.stack}`);
+        socket.close();
+    });
+
+    // Escuta por mensagens multicast do Gateway.
+    socket.on('message', (msg, rinfo) => {
+        console.log(`[${DEVICE_ID}] Mensagem de descoberta recebida do Gateway em ${rinfo.address}:${rinfo.port}`);
+        
+        // Armazena a configuração do RabbitMQ.
+        const gatewayMessage = JSON.parse(msg.toString());
+        rabbitMQConfig = gatewayMessage.rabbitmq;
+
+        // Prepara a resposta para o Gateway.
+        const responsePayload = Buffer.from(JSON.stringify({
+            id: DEVICE_ID,
+            type: DEVICE_TYPE,
+            // Sensores não têm porta gRPC, então não a enviamos.
+        }));
+
+        // Envia a resposta diretamente para o Gateway (Unicast).
+        const responseSocket = dgram.createSocket('udp4');
+        responseSocket.send(responsePayload, 0, responsePayload.length, rinfo.port, rinfo.address, (err) => {
+            if (err) {
+                console.error(`[${DEVICE_ID}] Erro ao enviar resposta UDP:`, err);
+            } else {
+                console.log(`[${DEVICE_ID}] Resposta de descoberta enviada para o Gateway.`);
+            }
+            responseSocket.close();
+        });
+
+        // Inicia o envio de dados, pois o Gateway agora está ciente deste dispositivo.
+        startSendingData();
+    });
+
+    socket.bind(MULTICAST_PORT, () => {
+        socket.addMembership(MULTICAST_GROUP);
+        console.log(`[*] Sensor '${DEVICE_ID}': Aguardando descoberta pelo Gateway no grupo ${MULTICAST_GROUP}:${MULTICAST_PORT}`);
+    });
+}
+
+// Inicia o processo de escuta pela descoberta.
+listenForDiscovery();

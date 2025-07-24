@@ -9,7 +9,7 @@ from concurrent import futures
 import argparse
 import socket
 
-# Garante que os módulos gRPC gerados possam ser importados.
+# Garante que os módulos gRPC gerados possam ser importados
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from . import device_pb2
 from . import device_pb2_grpc
